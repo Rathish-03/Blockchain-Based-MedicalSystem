@@ -1,0 +1,214 @@
+import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import HealthcareRecords from "./contracts/HealthcareRecords.json";
+
+const Healthcare = () => {
+  const [provider, setProvider] = useState(null);
+  const [signer, setSigner] = useState(null);
+  const [contract, setContract] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [isOwner, setIsOwner] = useState(null);
+
+  // form states
+  const [patientID, setPatientID] = useState("");
+  const [patientName, setPatientName] = useState("");
+  const [gender, setGender] = useState("");
+  const [age, setAge] = useState("");
+  const [bloodGroup, setBloodGroup] = useState("");
+  const [diagnosis, setDiagnosis] = useState("");
+  const [treatment, setTreatment] = useState("");
+  const [doctorName, setDoctorName] = useState("");
+  const [patientRecords, setPatientRecords] = useState([]);
+  const [providerAddress, setProviderAddress] = useState("");
+
+  useEffect(() => {
+    const connectWallet = async () => {
+      try {
+        //const provider = new ethers.BrowserProvider(window.ethereum); // ethers v6
+		const provider = new ethers.providers.Web3Provider(window.ethereum);//  ethers v5
+        await provider.send("eth_requestAccounts", []);
+        const signer = await provider.getSigner();
+        setProvider(provider);
+        setSigner(signer);
+
+        const accountAddress = await signer.getAddress();
+        setAccount(accountAddress);
+
+        const network = await provider.getNetwork();
+        const networkId = network.chainId.toString();
+
+        const deployedNetwork = HealthcareRecords.networks[networkId];
+        if (!deployedNetwork) {
+          alert(`Smart contract not deployed on chain ID ${networkId}`);
+          return;
+        }
+
+        const contract = new ethers.Contract(
+          deployedNetwork.address,
+          HealthcareRecords.abi,
+          signer
+        );
+        setContract(contract);
+
+        const ownerAddress = await contract.getOwner();
+        setIsOwner(accountAddress.toLowerCase() === ownerAddress.toLowerCase());
+      } catch (error) {
+        console.error("Error connecting to wallet: ", error);
+      }
+    };
+
+    connectWallet();
+  }, []);
+
+  const fetchPatientRecords = async () => {
+    try {
+      setPatientRecords([]);
+      if (!patientID) {
+        alert("Enter a patient ID first");
+        return;
+      }
+
+      const records = await contract.getPatientRecords(patientID);
+      console.log("Fetched records:", records);
+      setPatientRecords(records);
+    } catch (error) {
+      console.error("Error fetching patient records", error);
+    }
+  };
+
+  const addRecord = async () => {
+    try {
+      if (!patientID || !patientName || !gender || !age || !bloodGroup || !diagnosis || !treatment || !doctorName) {
+        alert("Please fill all fields");
+        return;
+      }
+
+      const tx = await contract.addRecord(
+        patientID,
+        patientName,
+        gender,
+        age,
+        bloodGroup,
+        diagnosis,
+        treatment,
+        doctorName
+      );
+      await tx.wait();
+
+      alert("Patient record added successfully");
+
+      // reset
+      setPatientID("");
+      setPatientName("");
+      setGender("");
+      setAge("");
+      setBloodGroup("");
+      setDiagnosis("");
+      setTreatment("");
+      setDoctorName("");
+      setPatientRecords([]);
+    } catch (error) {
+      console.error("Error adding records", error);
+    }
+  };
+
+  const authorizeMyAccount = async () => {
+    try {
+      if (!contract) {
+        alert("Contract not loaded yet");
+        return;
+      }
+      const tx = await contract.authorizeProvider(account);
+      await tx.wait();
+      alert(`Your account (${account}) has been authorized as provider`);
+    } catch (error) {
+      console.error("Error authorizing account:", error);
+      alert("Failed to authorize your account. Make sure you are contract owner.");
+    }
+  };
+
+  const authorizeProvider = async () => {
+    if (isOwner) {
+      try {
+        if (!providerAddress) {
+          alert("Enter a provider address");
+          return;
+        }
+        const tx = await contract.authorizeProvider(providerAddress);
+        await tx.wait();
+        alert(`Provider ${providerAddress} authorized successfully`);
+        setProviderAddress("");
+      } catch (error) {
+        console.error("Only contract owner can authorize different providers", error);
+      }
+    } else {
+      alert("Only contract owner can call this function");
+    }
+  };
+
+  return (
+    <div className="container">
+      <h1 className="title">HealthCare Application</h1>
+      {account && <p className="account-info">Connected Account: {account}</p>}
+      {isOwner && <p className="owner-info">You are the contract owner</p>}
+
+      <div className="form-section">
+        <h2>Fetch Patient Records</h2>
+        <input
+          type="text"
+          placeholder="Enter Patient ID"
+          value={patientID}
+          onChange={(e) => setPatientID(e.target.value)}
+        />
+        <button onClick={fetchPatientRecords}>Fetch Records</button>
+      </div>
+
+      <div className="form-section">
+        <h2>Add Patient Record</h2>
+        <input type="text" placeholder="Patient Name" value={patientName} onChange={(e) => setPatientName(e.target.value)} />
+        <input type="text" placeholder="Gender" value={gender} onChange={(e) => setGender(e.target.value)} />
+        <input type="number" placeholder="Age" value={age} onChange={(e) => setAge(e.target.value)} />
+        <input type="text" placeholder="Blood Group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} />
+        <input type="text" placeholder="Diagnosis" value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} />
+        <input type="text" placeholder="Treatment" value={treatment} onChange={(e) => setTreatment(e.target.value)} />
+        <input type="text" placeholder="Doctor Name" value={doctorName} onChange={(e) => setDoctorName(e.target.value)} />
+        <button onClick={addRecord}>Add Record</button>
+      </div>
+
+      <div className="form-section">
+        <h2>Authorize HealthCare Provider</h2>
+        <input
+          type="text"
+          placeholder="Provider Address"
+          value={providerAddress}
+          onChange={(e) => setProviderAddress(e.target.value)}
+        />
+        <button onClick={authorizeProvider}>Authorize Provider</button>
+      </div>
+
+      <div className="form-section">
+        <h2>Authorize Yourself</h2>
+        <button onClick={authorizeMyAccount}>Authorize My Account</button>
+      </div>
+
+      <div className="records-section">
+        <h2>Patient Records</h2>
+        {patientRecords.map((record, index) => (
+          <div key={index} className="record-card">
+            <p>Record ID: {Number(record.recordID)}</p>
+            <p>Patient Name: {record.patientName}</p>
+            <p>Gender: {record.gender}</p>
+            <p>Age: {Number(record.age)}</p>
+            <p>Blood Group: {record.bloodGroup}</p>
+            <p>Diagnosis: {record.diagnosis}</p>
+            <p>Treatment: {record.treatment}</p>
+            <p>Doctor: {record.doctorName}</p>
+            <p>Timestamp: {new Date(Number(record.timestamp) * 1000).toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default Healthcare;
