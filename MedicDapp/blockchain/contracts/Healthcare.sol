@@ -19,6 +19,9 @@ contract HealthcareRecords {
         string treatment;
         string doctorName;
         uint256 timestamp;
+        string[] fileHashes; // IPFS hashes of uploaded files
+        string[] fileNames;  // Original file names
+        string[] fileTypes;  // File types (image, document, etc.)
     }
 
     mapping(uint256 => Record[]) private records;
@@ -98,9 +101,36 @@ contract HealthcareRecords {
                 diagnosis,
                 treatment,
                 doctorName,
-                block.timestamp
+                block.timestamp,
+                new string[](0), // fileHashes
+                new string[](0), // fileNames
+                new string[](0)  // fileTypes
             )
         );
+    }
+
+    // Add files to existing record
+    function addFilesToRecord(
+        uint256 patientID,
+        uint256 recordID,
+        string[] memory fileHashes,
+        string[] memory fileNames,
+        string[] memory fileTypes
+    ) external {
+        require(
+            msg.sender == patientOwner[patientID] ||
+            consent[patientID][msg.sender],
+            "Access denied"
+        );
+        require(recordID < records[patientID].length, "Record does not exist");
+
+        Record storage record = records[patientID][recordID];
+
+        for (uint256 i = 0; i < fileHashes.length; i++) {
+            record.fileHashes.push(fileHashes[i]);
+            record.fileNames.push(fileNames[i]);
+            record.fileTypes.push(fileTypes[i]);
+        }
     }
 
     // Secure record access

@@ -24,6 +24,7 @@ const Healthcare = () => {
   const [contract, setContract] = useState(null);
   const [account, setAccount] = useState(null);
   const [isOwner, setIsOwner] = useState(null);
+  const [ipfs, setIpfs] = useState(null);
 
   // form states
   const [patientID, setPatientID] = useState("");
@@ -37,6 +38,12 @@ const Healthcare = () => {
   const [doctorAddress, setDoctorAddress] = useState("");
   const [patientRecords, setPatientRecords] = useState([]);
   const [providerAddress, setProviderAddress] = useState("");
+
+  // file upload states
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadPatientID, setUploadPatientID] = useState("");
+  const [uploadRecordID, setUploadRecordID] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     const connectWallet = async () => {
@@ -65,6 +72,16 @@ const Healthcare = () => {
           signer
         );
         setContract(contract);
+
+        // Initialize Pinata JWT token
+        // Get your JWT token from https://pinata.cloud/ (Dashboard → API Keys)
+        const pinataJwt = process.env.REACT_APP_PINATA_JWT;
+
+        if (pinataJwt) {
+          setIpfs({ jwt: pinataJwt });
+        } else {
+          console.warn("Pinata JWT token not found. Please add it to .env file.");
+        }
 
         const ownerAddress = await contract.getOwner();
         setIsOwner(accountAddress.toLowerCase() === ownerAddress.toLowerCase());
@@ -156,6 +173,86 @@ const Healthcare = () => {
     } catch (error) {
       console.error("Error authorizing doctor:", error);
       alert("Failed to authorize doctor. Make sure you're the contract owner.");
+    }
+  };
+
+  const handleFileSelect = (event) => {
+    const files = Array.from(event.target.files);
+    setSelectedFiles(files);
+  };
+
+  const uploadFiles = async () => {
+    if (!uploadPatientID || !uploadRecordID || selectedFiles.length === 0) {
+      alert("Please fill all fields and select files");
+      return;
+    }
+
+    if (!ipfs || !ipfs.jwt) {
+      alert("Pinata JWT token not configured. Please check your .env file.");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const fileHashes = [];
+      const fileNames = [];
+      const fileTypes = [];
+
+      // Upload files to Pinata (IPFS pinning service)
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+
+        // Create FormData for Pinata upload
+        const formData = new FormData();
+        formData.append("file", file);
+
+        // Upload to Pinata
+        const response = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ipfs.jwt}`,
+          },
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Pinata upload failed (${response.status}): ${response.statusText || errorText}`);
+        }
+
+        const data = await response.json();
+        const cid = data.IpfsHash;
+
+        fileHashes.push(cid);
+        fileNames.push(file.name);
+        fileTypes.push(file.type || 'unknown');
+      }
+
+      // Store file hashes on blockchain
+      const tx = await contract.addFilesToRecord(
+        uploadPatientID,
+        uploadRecordID,
+        fileHashes,
+        fileNames,
+        fileTypes
+      );
+      await tx.wait();
+
+      alert("Files uploaded successfully to IPFS!");
+      setSelectedFiles([]);
+      setUploadPatientID("");
+      setUploadRecordID("");
+
+      // Refresh records if we're viewing the same patient
+      if (patientID === uploadPatientID) {
+        fetchPatientRecords();
+      }
+
+    } catch (error) {
+      console.error("Error uploading files:", error);
+      alert(`Failed to upload files to IPFS: ${error.message}. Please check your Pinata API keys.`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -259,6 +356,40 @@ const Healthcare = () => {
         </button>
       </div>
 
+      <div className="form-section">
+        <h3>Upload Files to Record</h3>
+        <input
+          type="number"
+          placeholder="Patient ID"
+          value={uploadPatientID}
+          onChange={(e) => setUploadPatientID(e.target.value)}
+        />
+        <input
+          type="number"
+          placeholder="Record ID"
+          value={uploadRecordID}
+          onChange={(e) => setUploadRecordID(e.target.value)}
+        />
+        <input
+          type="file"
+          multiple
+          accept="image/*,.pdf,.doc,.docx"
+          onChange={handleFileSelect}
+        />
+        {selectedFiles.length > 0 && (
+          <div>
+            <p>Selected files: {selectedFiles.map(f => f.name).join(', ')}</p>
+          </div>
+        )}
+        <button
+          className="green-btn"
+          onClick={uploadFiles}
+          disabled={uploading}
+        >
+          {uploading ? 'Uploading...' : 'Upload Files'}
+        </button>
+      </div>
+
       <div className="records-section">
         <h2>Patient Records</h2>
         {patientRecords.length === 0 && <p>No records found</p>}
@@ -273,6 +404,25 @@ const Healthcare = () => {
             <p><strong>Treatment:</strong> {record.treatment}</p>
             <p><strong>Doctor:</strong> {record.doctorName}</p>
             <p><strong>Timestamp:</strong> {new Date(Number(record.timestamp) * 1000).toLocaleString()}</p>
+
+            {record.fileHashes && record.fileHashes.length > 0 && (
+              <div className="files-section">
+                <h4>Attached Files:</h4>
+                {record.fileHashes.map((hash, fileIndex) => (
+                  <div key={fileIndex} className="file-item">
+                    <span>{record.fileNames[fileIndex]} ({record.fileTypes[fileIndex]})</span>
+                    <a
+                      href={`https://ipfs.io/ipfs/${hash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="file-link"
+                    >
+                      View/Download
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -326,6 +476,34 @@ const Healthcare = () => {
           padding: 10px;
           margin-bottom: 10px;
           background: white;
+        }
+        .files-section {
+          margin-top: 10px;
+          padding: 8px;
+          background: #f5f5f5;
+          border-radius: 4px;
+        }
+        .files-section h4 {
+          margin: 0 0 8px 0;
+          color: #333;
+        }
+        .file-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 4px 0;
+          border-bottom: 1px solid #eee;
+        }
+        .file-item:last-child {
+          border-bottom: none;
+        }
+        .file-link {
+          color: #007bff;
+          text-decoration: none;
+          font-size: 14px;
+        }
+        .file-link:hover {
+          text-decoration: underline;
         }
       `}</style>
     </div>
